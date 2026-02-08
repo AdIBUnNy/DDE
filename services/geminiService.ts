@@ -16,6 +16,8 @@ const client = new OpenAI({
   dangerouslyAllowBrowser: true
 });
 
+const MAX_REFERENCE_CHARS = 12000;
+
 const buildPrompt = (
   prompt: string,
   referenceFile?: { name: string; content: string },
@@ -25,7 +27,10 @@ const buildPrompt = (
   let finalPrompt = `Primary Goal: ${prompt}\n\n`;
 
   if (referenceFile) {
-    finalPrompt += `Context: User provided a reference file named "${referenceFile.name}" with content:\n${referenceFile.content}\n\n`;
+    const content = referenceFile.content.length > MAX_REFERENCE_CHARS
+      ? `${referenceFile.content.slice(0, MAX_REFERENCE_CHARS)}\n\n[Truncated after ${MAX_REFERENCE_CHARS} characters]`
+      : referenceFile.content;
+    finalPrompt += `Context: User provided a reference file named "${referenceFile.name}" with content:\n${content}\n\n`;
   }
 
   if (suggestion && previousCode) {

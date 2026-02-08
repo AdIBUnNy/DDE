@@ -14,15 +14,25 @@ import PipelineGraph from './components/PipelineGraph';
 import { generatePipeline } from './services/geminiService';
 import { GeneratedPipeline, PipelineStatus, PipelineStep, PipelineSchedule, ScheduleType } from './types';
 
-const DEFAULT_PROMPT = `Create an Airflow DAG that fetches finance api:
-1. Read a CSV file containing finance readings from S3,
-2. Fill missing values with the median of each column,
-3. Fill missing values using forward-fill method,
-4. Clean Finance Data,
-5. Calculate new financial metrics: daily return and moving average,
-6. Aggregate data by sector,
-7. Store the results in PostgreSQL,
-8. Log completion or errors.`;
+const DEFAULT_PROMPT = `
+
+Create an Airflow DAG that processes motor sensor data:
+
+1. Read a CSV file containing motor sensor readings (RPM, torque, vibration, temperature, current, voltage, motor_id, sector/plant) from S3.
+2. Fill missing values using the median of each numerical column.
+3. Apply forward-fill to remaining missing time-series values per motor.
+4. Clean motor data (remove duplicates, handle outliers, normalize units, validate ranges).
+5. Compute new motor metrics:
+
+   * Power output
+   * Efficiency
+   * Temperature gradient
+   * Vibration moving average
+6. Aggregate metrics by motor type / production line / plant.
+7. Store the aggregated results in PostgreSQL.
+8. Log successful completion or errors at each task.
+
+`;
 
 const STAGES = [
   "Parsing requirements data...",
@@ -32,6 +42,9 @@ const STAGES = [
   "Performing logic validation...",
   "Finalizing container config..."
 ];
+
+const MAX_PROMPT_CHARS = 4000;
+const MAX_EXTRACT_CHARS = 12000;
 
 const App: React.FC = () => {
   const [view, setView] = useState<ViewType>('dashboard');
@@ -46,6 +59,14 @@ const App: React.FC = () => {
   const [dagPositions, setDagPositions] = useState<Record<string, Record<string, { x: number; y: number }>>>({});
   const [isDownloading, setIsDownloading] = useState(false);
   const [outputPreview, setOutputPreview] = useState<any[] | null>(null);
+  const [lastRefinement, setLastRefinement] = useState<{
+    prompt: string;
+    prevName?: string;
+    newName?: string;
+    prevSteps: number;
+    newSteps: number;
+    timestamp: number;
+  } | null>(null);
   
   const [progress, setProgress] = useState(0);
   const [currentStage, setCurrentStage] = useState("");
@@ -56,6 +77,7 @@ const App: React.FC = () => {
   const [simulationProgress, setSimulationProgress] = useState(0);
   const [activeStepId, setActiveStepId] = useState<string | null>(null);
   const [liveMetrics, setLiveMetrics] = useState({ cpu: 0, ram: 0, tps: 0 });
+  const [isRefining, setIsRefining] = useState(false);
 
   const [versions, setVersions] = useState<GeneratedPipeline[]>([]);
   const [history, setHistory] = useState<GeneratedPipeline[]>([]);
@@ -67,17 +89,60 @@ const App: React.FC = () => {
   ]);
   const [openDataSourceMenuId, setOpenDataSourceMenuId] = useState<string | null>(null);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        setReferenceFile({
-          name: file.name,
-          content: ev.target?.result as string
-        });
-      };
-      reader.readAsText(file);
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isPdf = file.type === 'application/pdf' || lowerName.endsWith('.pdf');
+    const isDocx = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || lowerName.endsWith('.docx');
+    const isTextMime = file.type.startsWith('text/') || file.type === 'application/json';
+    const allowedExtensions = ['.txt', '.md', '.markdown', '.csv', '.json', '.yaml', '.yml', '.log', '.pdf', '.docx'];
+    const isAllowedExt = allowedExtensions.some((ext) => lowerName.endsWith(ext));
+
+    if (!isTextMime && !isAllowedExt) {
+      setError('Unsupported file type. Please upload a text file, PDF, or DOCX.');
+      return;
+    }
+
+    setError(null);
+    try {
+      let extractedText = '';
+      if (isPdf) {
+        const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
+        const workerModule = await import('pdfjs-dist/build/pdf.worker.min.mjs');
+        const workerSrc = (workerModule as any).default || workerModule;
+        (pdfjs as any).GlobalWorkerOptions.workerSrc = workerSrc;
+
+        const data = new Uint8Array(await file.arrayBuffer());
+        const pdf = await (pdfjs as any).getDocument({ data }).promise;
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+          const page = await pdf.getPage(pageNum);
+          const content = await page.getTextContent();
+          const pageText = content.items
+            .map((item: any) => (item && item.str ? item.str : ''))
+            .join(' ');
+          extractedText += `${pageText}\n`;
+        }
+      } else if (isDocx) {
+        const mammoth = await import('mammoth/mammoth.browser.js');
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await (mammoth as any).extractRawText({ arrayBuffer });
+        extractedText = result?.value || '';
+      } else {
+        extractedText = await file.text();
+      }
+
+      const trimmed = extractedText.trim().slice(0, MAX_EXTRACT_CHARS);
+      setReferenceFile({
+        name: file.name,
+        content: trimmed
+      });
+      if (trimmed) {
+        setPrompt(trimmed.slice(0, MAX_PROMPT_CHARS));
+      }
+    } catch (err) {
+      setError('Unable to read the file. Please try a different file.');
     }
   };
 
@@ -125,7 +190,12 @@ const App: React.FC = () => {
   };
 
   const handleGenerate = async (suggestion?: string) => {
-    if (!prompt.trim()) return;
+    const hasPrompt = !!prompt.trim();
+    const hasReference = !!referenceFile?.content?.trim();
+    if (!hasPrompt && !hasReference) return;
+    const previousResult = result;
+    const effectivePrompt = hasPrompt ? prompt : 'Derive requirements from the reference file.';
+    setIsRefining(!!suggestion);
     setStatus('generating');
     setError(null);
     setIsSimulating(false);
@@ -136,7 +206,7 @@ const App: React.FC = () => {
     
     try {
       const pipeline = await generatePipeline(
-        prompt, 
+        effectivePrompt, 
         referenceFile || undefined, 
         suggestion, 
         result?.airflowCode
@@ -149,12 +219,24 @@ const App: React.FC = () => {
       };
       setResult(newPipeline);
       setHistory(prev => [newPipeline, ...prev]);
+      if (suggestion) {
+        setLastRefinement({
+          prompt: suggestion,
+          prevName: previousResult?.name,
+          newName: newPipeline.name,
+          prevSteps: previousResult?.steps?.length || 0,
+          newSteps: newPipeline.steps?.length || 0,
+          timestamp: Date.now()
+        });
+      }
       setStatus('completed');
       stopSimulatedProgress(true);
     } catch (err: any) {
       setError(err.message || 'Architecture computation failed.');
       setStatus('error');
       stopSimulatedProgress(false);
+    } finally {
+      setIsRefining(false);
     }
   };
 
@@ -306,7 +388,12 @@ const App: React.FC = () => {
                 <label className="flex items-center gap-2 text-[10px] text-blue-500 hover:text-blue-400 cursor-pointer uppercase tracking-widest font-black transition-colors">
                     <Upload size={14} /> 
                     {referenceFile ? `Using: ${referenceFile.name}` : 'Reference File'}
-                    <input type="file" className="hidden" onChange={handleFileUpload} />
+                    <input
+                      type="file"
+                      accept=".txt,.md,.markdown,.csv,.json,.yaml,.yml,.log,.pdf,.docx"
+                      className="hidden"
+                      onChange={handleFileUpload}
+                    />
                 </label>
                 <div className="w-px h-3 bg-gray-800"></div>
                 <button onClick={() => setPrompt(DEFAULT_PROMPT)} className="text-[10px] text-gray-500 hover:text-blue-500 uppercase tracking-widest font-black">Reset</button>
@@ -447,16 +534,16 @@ const App: React.FC = () => {
                     <button
                       onClick={handleDownloadProject}
                       disabled={!result || isDownloading}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                      className={`px-3 py-1.5 rounded-lg text-[7px] font-black uppercase tracking-widest transition-all ${
                         isDownloading
                           ? 'bg-gray-700 text-gray-300 cursor-wait'
                           : 'bg-blue-600 text-white hover:bg-blue-500'
                       }`}
                     >
-                      <Download size={12} /> {isDownloading ? 'Preparing...' : 'Download'}
+                      <Download size={8} /> {isDownloading ? 'Preparing...' : 'Download'}
                     </button>
                   </div>
-                  <div className={`text-[10px] font-mono leading-5 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                  <div className={`text-[10px] font-mono leading-5 break-all overflow-hidden ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
                     <div className="flex items-center gap-2">
                       <span>project/</span>
                     </div>
@@ -467,6 +554,49 @@ const App: React.FC = () => {
                     <div className="pl-3">requirements.txt</div>
                     <div className="pl-3">README.md</div>
                   </div>
+                </div>
+
+                <div className={`mt-4 rounded-xl border p-4 ${theme === 'dark' ? 'bg-black/60 border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className={`p-2 rounded-lg border ${theme === 'dark' ? 'bg-black border-gray-800 text-emerald-500' : 'bg-white border-gray-200 text-emerald-600'}`}>
+                      <FileText size={14} />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-500">Refinement Changes</span>
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-gray-600">Latest delta snapshot</span>
+                    </div>
+                  </div>
+                  {lastRefinement ? (
+                    <div className={`text-[10px] font-mono leading-5 break-words ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                      <div className={`rounded-lg border px-3 py-2 mb-3 ${theme === 'dark' ? 'bg-black/50 border-gray-800' : 'bg-white border-gray-200'}`}>
+                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-500">Prompt</span>
+                        <div className="mt-1 text-[10px] leading-4 line-clamp-3">
+                          {lastRefinement.prompt}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'bg-black/40 border-gray-800' : 'bg-white border-gray-200'}`}>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">Steps</span>
+                          <div className={`mt-1 text-[11px] font-black ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                            {lastRefinement.prevSteps} → {lastRefinement.newSteps}
+                          </div>
+                        </div>
+                        <div className={`rounded-lg border px-3 py-2 ${theme === 'dark' ? 'bg-black/40 border-gray-800' : 'bg-white border-gray-200'}`}>
+                          <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">Name</span>
+                          <div className={`mt-1 text-[11px] font-black truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
+                            {lastRefinement.prevName || 'Untitled'} → {lastRefinement.newName || 'Untitled'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-3 text-[9px] uppercase tracking-widest text-gray-500">
+                        Updated {new Date(lastRefinement.timestamp).toLocaleString()}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+                      No refinements yet.
+                    </p>
+                  )}
                 </div>
             </div>
           </div>
@@ -515,6 +645,8 @@ const App: React.FC = () => {
                 theme={theme} 
                 onAccept={handleAcceptArchitecture}
                 onReject={(suggestion) => handleGenerate(suggestion)}
+              isAccepted={!!result.isAccepted}
+              isRefining={isRefining}
             />
             <div className="space-y-8">
               <CodeBlock title="infrastructure/Dockerfile" code={result.dockerConfig} language="dockerfile" theme={theme} codeHeightClass="h-[280px]" />
@@ -615,7 +747,7 @@ const App: React.FC = () => {
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className={`text-2xl font-black uppercase tracking-tight ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Logic Library</h3>
+          <h3 className={`text-2xl font-black uppercase tracking-tight ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Pipelines</h3>
           <p className="text-sm text-gray-500 font-medium">Repository of formally accepted and versioned DAGs.</p>
         </div>
         <div className="flex items-center gap-6">
@@ -894,10 +1026,10 @@ const App: React.FC = () => {
                  view === 'history' ? <HistoryIcon className="text-blue-500" /> :
                  <CalendarDays className="text-blue-500" />}
                 <span className="uppercase tracking-[0.2em]">{
-                  view === 'datasources' ? 'Data Nodes' : 
+                  view === 'datasources' ? 'Data Sources' : 
                   view === 'versionControl' ? 'Decision Timeline' :
-                  view === 'pipelines' ? 'Logic Library' :
-                  view === 'history' ? 'Synthesis Audit' :
+                  view === 'pipelines' ? 'Pipelines' :
+                  view === 'history' ? 'History' :
                   view.replace('datasources', 'Data Sources')
                 }</span>
             </h2>

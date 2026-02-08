@@ -10,9 +10,11 @@ interface CodeBlockProps {
   onUpdate?: (newCode: string) => void;
   onAccept?: () => void;
   onReject?: (suggestion: string) => void;
+  isAccepted?: boolean;
+  isRefining?: boolean;
 }
 
-const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'python', title, theme = 'dark', codeHeightClass, onUpdate, onAccept, onReject }) => {
+const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'python', title, theme = 'dark', codeHeightClass, onUpdate, onAccept, onReject, isAccepted, isRefining }) => {
   const [copied, setCopied] = useState(false);
   const [localCode, setLocalCode] = useState(code);
   const [isRejecting, setIsRejecting] = useState(false);
@@ -71,29 +73,39 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ code, language = 'python', title,
         {(onAccept || onReject) && (
         <div className={`px-6 py-6 border-t transition-all ${theme === 'dark' ? 'bg-[#0c0f14] border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
           {!isRejecting ? (
-            <div className={`rounded-2xl border px-5 py-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 shadow-xl ${theme === 'dark' ? 'bg-gradient-to-br from-[#0f131a] via-[#0b0f14] to-[#0a0d12] border-gray-800/80' : 'bg-white border-gray-200'}`}>
+            <div className={`rounded-2xl border px-4 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 shadow-xl ${theme === 'dark' ? 'bg-gradient-to-br from-[#0f131a] via-[#0b0f14] to-[#0a0d12] border-gray-800/80' : 'bg-white border-gray-200'}`}>
               <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-emerald-500/15 text-emerald-400">
+                <div className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400">
                 <Sparkles size={16} />
                 </div>
                 <div className="flex flex-col">
-                <span className="text-[11px] font-black uppercase tracking-widest text-emerald-400">Architect Ready</span>
-                <span className="text-[10px] text-gray-500 font-bold uppercase tracking-tight">Finalize or request iterative refinement</span>
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-emerald-400">Architect Ready</span>
+                <span className="text-[9px] text-gray-500 font-bold uppercase tracking-tight">Finalize or request iterative refinement</span>
                 </div>
               </div>
                     
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full lg:w-auto">
+              <div className="grid grid-cols-2 gap-2 w-full lg:w-auto">
                 <button 
-                  onClick={() => { if (onAccept) onAccept(); }}
-                  className="flex items-center justify-center gap-3 px-8 py-3.5 bg-emerald-500 text-white hover:bg-emerald-400 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all shadow-xl shadow-emerald-600/30 ring-2 ring-emerald-400/40 active:scale-95"
+                  onClick={() => { if (!isAccepted && onAccept) onAccept(); }}
+                  disabled={!!isAccepted}
+                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.18em] transition-all shadow-xl ring-2 active:scale-95 ${
+                    isAccepted
+                      ? 'bg-emerald-500/60 text-white/80 cursor-not-allowed ring-emerald-400/20 shadow-emerald-600/10'
+                      : 'bg-emerald-500 text-white hover:bg-emerald-400 ring-emerald-400/40 shadow-emerald-600/30'
+                  }`}
                 >
-                  <ThumbsUp size={16} /> Accept & Store
+                  {isAccepted ? <Check size={16} /> : <ThumbsUp size={16} />} {isAccepted ? 'Accepted & Stored' : 'Accept & Store'}
                 </button>
                 <button 
                   onClick={() => setIsRejecting(true)}
-                  className="flex items-center justify-center gap-3 px-8 py-3.5 bg-sky-600 text-white hover:bg-sky-500 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all shadow-xl shadow-sky-600/30 ring-2 ring-sky-400/40 active:scale-95"
+                  disabled={!!isRefining}
+                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-[0.18em] transition-all shadow-xl ring-2 active:scale-95 ${
+                    isRefining
+                      ? 'bg-sky-600/60 text-white/80 cursor-not-allowed ring-sky-400/20 shadow-sky-600/10'
+                      : 'bg-sky-600 text-white hover:bg-sky-500 shadow-sky-600/30 ring-sky-400/40'
+                  }`}
                 >
-                  <ThumbsDown size={16} /> Refine Design
+                  <ThumbsDown size={16} /> {isRefining ? 'Refining...' : 'Refine Design'}
                 </button>
               </div>
             </div>
