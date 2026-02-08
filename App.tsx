@@ -60,11 +60,12 @@ const App: React.FC = () => {
   const [versions, setVersions] = useState<GeneratedPipeline[]>([]);
   const [history, setHistory] = useState<GeneratedPipeline[]>([]);
   
-  const [dataSources] = useState([
+  const [dataSources, setDataSources] = useState([
     { id: 'ds-1', name: 'Finance S3 Bucket', type: 'AWS S3', status: 'connected', region: 'us-east-1', lastCheck: '2m ago' },
     { id: 'ds-2', name: 'Market Data PostgreSQL', type: 'PostgreSQL', status: 'connected', region: 'eu-central-1', lastCheck: '14m ago' },
     { id: 'ds-3', name: 'AlphaVantage API', type: 'REST API', status: 'error', region: 'global', lastCheck: '1h ago' },
   ]);
+  const [openDataSourceMenuId, setOpenDataSourceMenuId] = useState<string | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -196,6 +197,56 @@ const App: React.FC = () => {
     const acceptedPipeline = { ...result, isAccepted: true };
     setResult(acceptedPipeline);
     setVersions((prev) => [acceptedPipeline, ...prev]);
+  };
+
+  const handleProvisionNode = () => {
+    const name = window.prompt('Data source name:', 'New Data Source');
+    if (!name) return;
+    const type = window.prompt('Type (e.g., AWS S3, PostgreSQL, REST API):', 'REST API') || 'Unknown';
+    const region = window.prompt('Region (e.g., us-east-1, global):', 'global') || 'global';
+    const id = `ds-${Date.now().toString(36)}`;
+
+    setDataSources((prev) => [
+      {
+        id,
+        name,
+        type,
+        status: 'connected',
+        region,
+        lastCheck: 'just now'
+      },
+      ...prev
+    ]);
+  };
+
+  const handleLinkSettings = (id: string) => {
+    const target = dataSources.find((ds) => ds.id === id);
+    if (!target) return;
+    const name = window.prompt('Update name:', target.name) || target.name;
+    const type = window.prompt('Update type:', target.type) || target.type;
+    const region = window.prompt('Update region:', target.region) || target.region;
+    const statusInput = window.prompt('Status (connected|error):', target.status) || target.status;
+    const status = statusInput === 'error' ? 'error' : 'connected';
+
+    setDataSources((prev) =>
+      prev.map((ds) =>
+        ds.id === id
+          ? {
+              ...ds,
+              name,
+              type,
+              region,
+              status,
+              lastCheck: 'just now'
+            }
+          : ds
+      )
+    );
+  };
+
+  const handleDeleteDataSource = (id: string) => {
+    setDataSources((prev) => prev.filter((ds) => ds.id !== id));
+    setOpenDataSourceMenuId((prev) => (prev === id ? null : prev));
   };
 
   const buildProjectZipName = (pipelineName: string) =>
@@ -494,7 +545,10 @@ const App: React.FC = () => {
           <h3 className={`text-2xl font-black uppercase tracking-tight ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Resource Topology</h3>
           <p className="text-sm text-gray-500 font-medium">Manage input streams and MBSE artifact repositories.</p>
         </div>
-        <button className="flex items-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl hover:bg-blue-500 transition-all">
+        <button
+          onClick={handleProvisionNode}
+          className="flex items-center gap-2 px-6 py-4 bg-blue-600 text-white rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl hover:bg-blue-500 transition-all"
+        >
           <PlusCircle size={18} /> Provision Node
         </button>
       </div>
@@ -524,11 +578,32 @@ const App: React.FC = () => {
                 <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>{ds.lastCheck}</span>
               </div>
             </div>
-            <div className="mt-10 flex gap-4">
-              <button className={`flex-1 py-4 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${theme === 'dark' ? 'bg-black border-gray-800 text-gray-400 hover:text-white hover:border-gray-600' : 'bg-gray-50 border-gray-200 text-gray-500 hover:text-gray-900'}`}>Link Settings</button>
-              <button className={`p-4 rounded-2xl border transition-all ${theme === 'dark' ? 'bg-black border-gray-800 text-gray-500 hover:text-white' : 'bg-gray-50 border-gray-200 text-gray-400 hover:text-gray-900'}`}>
+            <div className="mt-10 flex gap-4 relative">
+              <button
+                onClick={() => handleLinkSettings(ds.id)}
+                className={`flex-1 py-4 rounded-2xl border text-[10px] font-black uppercase tracking-widest transition-all ${theme === 'dark' ? 'bg-black border-gray-800 text-gray-400 hover:text-white hover:border-gray-600' : 'bg-gray-50 border-gray-200 text-gray-500 hover:text-gray-900'}`}
+              >
+                Link Settings
+              </button>
+              <button
+                onClick={() => setOpenDataSourceMenuId((prev) => (prev === ds.id ? null : ds.id))}
+                className={`p-4 rounded-2xl border transition-all ${theme === 'dark' ? 'bg-black border-gray-800 text-gray-500 hover:text-white' : 'bg-gray-50 border-gray-200 text-gray-400 hover:text-gray-900'}`}
+                aria-label="Open data source menu"
+              >
                 <MoreVertical size={20} />
               </button>
+              {openDataSourceMenuId === ds.id && (
+                <div
+                  className={`absolute right-0 top-14 w-40 rounded-xl border shadow-xl z-20 ${theme === 'dark' ? 'bg-[#0a0a0a] border-gray-800' : 'bg-white border-gray-200'}`}
+                >
+                  <button
+                    onClick={() => handleDeleteDataSource(ds.id)}
+                    className={`w-full px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest transition-all ${theme === 'dark' ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50'}`}
+                  >
+                    Delete Node
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}

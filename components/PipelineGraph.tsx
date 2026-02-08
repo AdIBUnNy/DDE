@@ -20,6 +20,7 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [svgHeight, setSvgHeight] = useState(350);
+  const [isLayoutSaved, setIsLayoutSaved] = useState(false);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
 
   useEffect(() => {
@@ -176,6 +177,7 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({
         positionsRef.current[d.id] = { x: d.x, y: d.y };
         d3.select(this).attr('transform', `translate(${d.x}, ${d.y})`);
         updateLinks();
+        setIsLayoutSaved(false);
       })
       .on('end', function () {
         d3.select(this).style('cursor', 'grab');
@@ -220,6 +222,7 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({
       .style('letter-spacing', '0.1em')
       .text(d => d.name.length > 16 ? d.name.substring(0, 13) + '...' : d.name);
 
+    setIsLayoutSaved(!!savedPositions && Object.keys(savedPositions).length > 0);
   }, [steps, activeStepId, theme, savedPositions]);
 
   return (
@@ -250,10 +253,19 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({
           </div>
         </div>
         <button
-          onClick={() => onSavePositions?.(positionsRef.current)}
-          className={`ml-4 flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${theme === 'dark' ? 'bg-[#0c0f14] border-gray-800 text-gray-400 hover:text-white hover:border-blue-500/40' : 'bg-white border-gray-200 text-gray-500 hover:text-blue-600 hover:border-blue-500/30'}`}
+          onClick={() => {
+            onSavePositions?.(positionsRef.current);
+            setIsLayoutSaved(true);
+          }}
+          className={`ml-4 flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+            isLayoutSaved
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+              : theme === 'dark'
+                ? 'bg-[#0c0f14] border-gray-800 text-gray-400 hover:text-white hover:border-blue-500/40'
+                : 'bg-white border-gray-200 text-gray-500 hover:text-blue-600 hover:border-blue-500/30'
+          }`}
         >
-          <Save size={14} /> Save Layout
+          <Save size={14} /> {isLayoutSaved ? 'Layout Saved' : 'Save Layout'}
         </button>
       </div>
       <div className="relative overflow-visible">
