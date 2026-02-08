@@ -1,16 +1,26 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { PipelineStep } from '../types';
-import { Workflow, Share2 } from 'lucide-react';
+import { Workflow, Share2, Save } from 'lucide-react';
 
 interface PipelineGraphProps {
   steps: PipelineStep[];
   activeStepId?: string | null;
   theme?: 'dark' | 'light';
+  savedPositions?: Record<string, { x: number; y: number }>;
+  onSavePositions?: (positions: Record<string, { x: number; y: number }>) => void;
 }
 
-const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, theme = 'dark' }) => {
+const PipelineGraph: React.FC<PipelineGraphProps> = ({
+  steps,
+  activeStepId,
+  theme = 'dark',
+  savedPositions,
+  onSavePositions
+}) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const [svgHeight, setSvgHeight] = useState(350);
+  const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
 
   useEffect(() => {
     if (!svgRef.current || steps.length === 0) return;
@@ -20,8 +30,9 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
 
     const container = svgRef.current.parentElement;
     const width = container?.clientWidth || 800;
-    const height = 350;
-    const nodeRadius = 28;
+    const baseHeight = 320;
+    const perNodeHeight = 70;
+    const nodeRadius = 22;
 
     const colors = {
       nodeBg: theme === 'dark' ? '#0a0a0a' : '#fff',
@@ -47,14 +58,36 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
       nodes.filter(n => n.layer === 2)
     ];
 
+    const maxLayerSize = Math.max(...layers.map(layer => layer.length), 1);
+    const height = Math.max(baseHeight, maxLayerSize * perNodeHeight);
+    setSvgHeight(height);
+
+    const paddingX = 100;
+    const paddingY = 50;
+
     nodes.forEach(n => {
       const layerNodes = layers[n.layer];
       const nodeIdx = layerNodes.indexOf(n);
-      const layerX = 120 + n.layer * ((width - 240) / 2);
-      const layerY = (height / (layerNodes.length + 1)) * (nodeIdx + 1);
+      const layerX = paddingX + n.layer * ((width - paddingX * 2) / 2);
+      const layerY = paddingY + ((height - paddingY * 2) / (layerNodes.length + 1)) * (nodeIdx + 1);
       n.x = layerX;
       n.y = layerY;
     });
+
+    if (savedPositions) {
+      nodes.forEach((n) => {
+        const saved = savedPositions[n.id];
+        if (saved) {
+          n.x = saved.x;
+          n.y = saved.y;
+        }
+      });
+    }
+
+    positionsRef.current = nodes.reduce((acc: Record<string, { x: number; y: number }>, n: any) => {
+      acc[n.id] = { x: n.x, y: n.y };
+      return acc;
+    }, {});
 
     const links: any[] = [];
     steps.forEach(step => {
@@ -67,6 +100,18 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
 
     const g = svg.append('g');
     const defs = svg.append('defs');
+
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.7, 1.6])
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform.toString());
+      });
+
+    svg.call(zoom as any)
+      .on('dblclick.zoom', null)
+      .style('cursor', 'grab')
+      .on('mousedown', () => svg.style('cursor', 'grabbing'))
+      .on('mouseup', () => svg.style('cursor', 'grab'));
 
     // Arrow Marker
     defs.append('marker')
@@ -87,7 +132,7 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
     filter.append('feComposite').attr('in', 'SourceGraphic').attr('in2', 'blur').attr('operator', 'over');
 
     // Draw Links
-    g.selectAll('.link')
+    const linkSelection = g.selectAll<SVGPathElement, any>('.link')
       .data(links)
       .enter()
       .append('path')
@@ -99,21 +144,49 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
       })
       .attr('fill', 'none')
       .attr('stroke', (d: any) => d.target.id === activeStepId ? colors.linkActive : colors.linkDefault)
-      .attr('stroke-width', 2.5)
+      .attr('stroke-width', 2)
       .attr('marker-end', 'url(#arrowhead-graph)')
       .style('opacity', 0.9);
 
+    const updateLinks = () => {
+      linkSelection.attr('d', (d: any) => {
+        const dx = d.target.x - d.source.x;
+        const dy = d.target.y - d.source.y;
+        const dr = Math.sqrt(dx * dx + dy * dy);
+        return `M${d.source.x},${d.source.y}C${d.source.x + dr/2},${d.source.y} ${d.target.x - dr/2},${d.target.y} ${d.target.x},${d.target.y}`;
+      });
+    };
+
     // Draw Nodes
-    const nodeGroups = g.selectAll('.node')
+    const nodeGroups = g.selectAll<SVGGElement, any>('.node')
       .data(nodes)
       .enter()
       .append('g')
-      .attr('transform', d => `translate(${d.x}, ${d.y})`);
+      .attr('transform', d => `translate(${d.x}, ${d.y})`)
+      .style('cursor', 'grab');
+
+    const dragBehavior = d3.drag<SVGGElement, any>()
+      .on('start', function (event) {
+        event.sourceEvent?.stopPropagation();
+        d3.select(this).style('cursor', 'grabbing');
+      })
+      .on('drag', function (event, d) {
+        d.x = event.x;
+        d.y = event.y;
+        positionsRef.current[d.id] = { x: d.x, y: d.y };
+        d3.select(this).attr('transform', `translate(${d.x}, ${d.y})`);
+        updateLinks();
+      })
+      .on('end', function () {
+        d3.select(this).style('cursor', 'grab');
+      });
+
+    nodeGroups.call(dragBehavior as any);
 
     // Glow for active node
     nodeGroups.filter(d => d.id === activeStepId)
       .append('circle')
-      .attr('r', nodeRadius + 8)
+      .attr('r', nodeRadius + 6)
       .attr('fill', colors.activeGlow)
       .style('filter', 'url(#glow-node)')
       .append('animate')
@@ -126,45 +199,47 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
       .attr('r', nodeRadius)
       .attr('fill', colors.nodeBg)
       .attr('stroke', d => d.id === activeStepId ? colors.linkActive : colors.nodeBorder)
-      .attr('stroke-width', 3);
+      .attr('stroke-width', 2.5);
 
     nodeGroups.append('text')
       .attr('text-anchor', 'middle')
       .attr('dy', '.3em')
       .attr('fill', d => d.id === activeStepId ? colors.linkActive : colors.textMain)
       .style('font-family', 'JetBrains Mono')
-      .style('font-size', '12px')
+      .style('font-size', '11px')
       .style('font-weight', 'black')
       .text((d, i) => i + 1);
 
     nodeGroups.append('text')
-      .attr('dy', 52)
+      .attr('dy', 42)
       .attr('text-anchor', 'middle')
       .attr('fill', d => d.id === activeStepId ? colors.linkActive : colors.textSub)
-      .style('font-size', '9px')
+      .style('font-size', '8px')
       .style('font-weight', 'bold')
       .style('text-transform', 'uppercase')
       .style('letter-spacing', '0.1em')
-      .text(d => d.name.length > 18 ? d.name.substring(0, 15) + '...' : d.name);
+      .text(d => d.name.length > 16 ? d.name.substring(0, 13) + '...' : d.name);
 
-  }, [steps, activeStepId, theme]);
+  }, [steps, activeStepId, theme, savedPositions]);
 
   return (
-    <div className={`w-full rounded-3xl border p-12 relative overflow-hidden transition-all duration-500 group shadow-2xl ${theme === 'dark' ? 'bg-[#050505] border-gray-800' : 'bg-white border-gray-200'}`}>
-      <div className="absolute top-0 right-0 p-10 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
-        <Workflow size={160} className="text-blue-500" />
+    <div className={`w-full rounded-[2.25rem] border p-8 relative overflow-hidden transition-all duration-500 group shadow-[0_25px_60px_-45px_rgba(59,130,246,0.6)] ${theme === 'dark' ? 'bg-[#07090c] border-gray-800' : 'bg-white border-gray-200'}`}>
+      <div className="absolute -top-16 -right-12 h-56 w-56 rounded-full bg-blue-500/10 blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-0 left-0 h-40 w-40 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none"></div>
+      <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none group-hover:opacity-20 transition-opacity">
+        <Workflow size={140} className="text-blue-500" />
       </div>
-      <div className="flex items-center justify-between mb-12 relative z-10">
+      <div className="flex items-center justify-between mb-8 relative z-10">
         <div className="flex items-center gap-4">
-          <div className="p-3 bg-blue-600/10 rounded-xl border border-blue-600/20">
-            <Share2 size={20} className="text-blue-500" />
+          <div className="p-3 bg-blue-600/10 rounded-xl border border-blue-600/20 shadow-lg shadow-blue-600/10">
+            <Share2 size={18} className="text-blue-500" />
           </div>
           <div>
-            <h3 className={`text-md font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>DAG Execution Schema</h3>
+            <h3 className={`text-sm font-black tracking-[0.18em] uppercase ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>DAG Execution Schema</h3>
             <p className="text-[10px] text-gray-500 uppercase tracking-widest font-black mt-1">Topology Visualizer</p>
           </div>
         </div>
-        <div className="flex gap-8">
+        <div className="hidden sm:flex gap-6">
           <div className="flex items-center gap-3">
             <div className="w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_10px_#3b82f6]"></div>
             <span className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Active Thread</span>
@@ -174,9 +249,15 @@ const PipelineGraph: React.FC<PipelineGraphProps> = ({ steps, activeStepId, them
             <span className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Logic Flow</span>
           </div>
         </div>
+        <button
+          onClick={() => onSavePositions?.(positionsRef.current)}
+          className={`ml-4 flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${theme === 'dark' ? 'bg-[#0c0f14] border-gray-800 text-gray-400 hover:text-white hover:border-blue-500/40' : 'bg-white border-gray-200 text-gray-500 hover:text-blue-600 hover:border-blue-500/30'}`}
+        >
+          <Save size={14} /> Save Layout
+        </button>
       </div>
       <div className="relative overflow-visible">
-        <svg ref={svgRef} width="100%" height="350" className="mx-auto"></svg>
+        <svg ref={svgRef} width="100%" height={svgHeight} className="mx-auto"></svg>
       </div>
     </div>
   );

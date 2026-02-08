@@ -92,7 +92,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, theme }) => 
         </nav>
       </div>
 
-      <div className={`p-6 border-t ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}`}>
+      {/* <div className={`p-6 border-t ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}`}>
         <NavItem 
           icon={<Settings size={18} />} 
           label="Settings" 
@@ -100,7 +100,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, theme }) => 
           active={currentView === 'settings'} 
           onClick={() => onNavigate('settings')} 
         />
-      </div>
+      </div> */}
     </aside>
   );
 };

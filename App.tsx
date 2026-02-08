@@ -5,8 +5,9 @@ import {
   Settings as SettingsIcon, Plus, History as HistoryIcon, GitBranch, Save, 
   ChevronRight, Play, Terminal, ShieldCheck, RefreshCw, XCircle, BarChart3, 
   Cpu, Gauge, Sun, Moon, Upload, FileText, CalendarDays, Rocket, Table, Archive, ExternalLink,
-  Filter, PlusCircle, Search, Link2, MoreVertical, Timer, Compass
+  Filter, PlusCircle, Search, Link2, MoreVertical, Timer, Compass, Download, Folder
 } from 'lucide-react';
+import JSZip from 'jszip';
 import Sidebar, { ViewType } from './components/Sidebar';
 import CodeBlock from './components/CodeBlock';
 import PipelineGraph from './components/PipelineGraph';
@@ -41,6 +42,9 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [referenceFile, setReferenceFile] = useState<{ name: string; content: string } | null>(null);
   const [schedule, setSchedule] = useState<PipelineSchedule>({ type: 'once' });
+  const [deployStatus, setDeployStatus] = useState<'idle' | 'deploying' | 'deployed' | 'error'>('idle');
+  const [dagPositions, setDagPositions] = useState<Record<string, Record<string, { x: number; y: number }>>>({});
+  const [isDownloading, setIsDownloading] = useState(false);
   const [outputPreview, setOutputPreview] = useState<any[] | null>(null);
   
   const [progress, setProgress] = useState(0);
@@ -194,6 +198,51 @@ const App: React.FC = () => {
     setVersions((prev) => [acceptedPipeline, ...prev]);
   };
 
+  const buildProjectZipName = (pipelineName: string) =>
+    `${pipelineName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_project.zip`;
+
+  const handleDownloadProject = async () => {
+    if (!result) return;
+    setIsDownloading(true);
+
+    try {
+      const zip = new JSZip();
+      const safeName = result.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+
+      zip.file(`dags/${safeName}.py`, result.airflowCode || '# No DAG code generated');
+      zip.file('infrastructure/Dockerfile', result.dockerConfig || '# No Dockerfile generated');
+      zip.file('requirements.txt', (result.requirements || []).join('\n'));
+      zip.file(
+        'README.md',
+        `# ${result.name}\n\n${result.description}\n\n## Files\n- dags/${safeName}.py\n- infrastructure/Dockerfile\n- requirements.txt\n`
+      );
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = buildProjectZipName(result.name || 'pipeline');
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const handleDeployTimers = () => {
+    if (schedule.type === 'cron' && !schedule.cronValue?.trim()) {
+      setDeployStatus('error');
+      return;
+    }
+
+    setDeployStatus('deploying');
+    window.setTimeout(() => {
+      setDeployStatus('deployed');
+    }, 800);
+  };
+
   const renderDashboard = () => (
     <div className="space-y-8 animate-in fade-in duration-500">
       <section className="space-y-4">
@@ -281,35 +330,46 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <PipelineGraph steps={result.steps} activeStepId={activeStepId} theme={theme} />
+                <PipelineGraph
+                  steps={result.steps}
+                  activeStepId={activeStepId}
+                  theme={theme}
+                  savedPositions={dagPositions[result.id || result.name || 'default']}
+                  onSavePositions={(positions) =>
+                    setDagPositions((prev) => ({
+                      ...prev,
+                      [result.id || result.name || 'default']: positions
+                    }))
+                  }
+                />
             </div>
 
-            <div className={`w-full md:w-72 border rounded-2xl p-6 flex flex-col shadow-2xl ${theme === 'dark' ? 'bg-[#0a0a0a] border-gray-800' : 'bg-white border-gray-200'}`}>
-              <div className="flex items-center justify-between mb-5">
+            <div className={`w-full md:w-60 border rounded-2xl p-4 flex flex-col shadow-2xl ${theme === 'dark' ? 'bg-[#0a0a0a] border-gray-800' : 'bg-white border-gray-200'}`}>
+              <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                         <Rocket className="text-blue-500" size={18} />
                         <h4 className={`text-sm font-black uppercase tracking-widest ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Run Panel</h4>
                     </div>
                 </div>
                 
-                <div className="grid grid-cols-1 gap-3 mb-6">
-                  <div className={`p-3 rounded-xl border flex items-center justify-between ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-100'}`}>
+                <div className="grid grid-cols-1 gap-3 mb-4">
+                  <div className={`p-2 rounded-xl border flex items-center justify-between ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-100'}`}>
                         <div>
                           <p className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Load</p>
-                            <p className={`text-base font-black font-mono ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{liveMetrics.cpu}%</p>
+                            <p className={`text-[14px] font-black font-mono ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{liveMetrics.cpu}%</p>
                         </div>
                         <Cpu size={24} className="text-blue-500 opacity-20" />
                     </div>
-                          <div className={`p-3 rounded-xl border flex items-center justify-between ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-100'}`}>
+                          <div className={`p-2 rounded-xl border flex items-center justify-between ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-100'}`}>
                         <div>
                           <p className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Throughput</p>
-                          <p className={`text-base font-black font-mono ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{liveMetrics.tps} tx/s</p>
+                          <p className={`text-[14px] font-black font-mono ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{liveMetrics.tps} tx/s</p>
                         </div>
                         <Layers size={24} className="text-purple-500 opacity-20" />
                     </div>
                 </div>
 
-                <div className={`flex-1 rounded-xl p-3 font-mono text-[10px] overflow-y-auto max-h-48 border mb-5 scrollbar-hide ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
+                <div className={`flex-1 rounded-xl p-3 font-mono text-[10px] overflow-y-auto max-h-48 border mb-4 scrollbar-hide ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
                     {simulationLogs.map((log, i) => (
                       <div key={i} className={`mb-2 flex gap-2 ${log.includes('[SUCCESS]') ? 'text-emerald-500 font-bold' : 'text-gray-500'}`}>
                         <span className="opacity-30">❯</span>
@@ -322,10 +382,41 @@ const App: React.FC = () => {
                 <button 
                   onClick={runSimulation}
                   disabled={isSimulating}
-                  className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-2 active:scale-95"
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black text-xs uppercase tracking-widest transition-all shadow-xl flex items-center justify-center gap-2 active:scale-95"
                 >
                     {isSimulating ? <Loader2 size={16} className="animate-spin" /> : <><Play size={16} /> Execute Logic</>}
                 </button>
+
+                <div className={`mt-4 rounded-xl border p-3 ${theme === 'dark' ? 'bg-black/60 border-gray-800' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Folder size={14} className="text-blue-500" />
+                      <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Download Project</span>
+                    </div>
+                    <button
+                      onClick={handleDownloadProject}
+                      disabled={!result || isDownloading}
+                      className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                        isDownloading
+                          ? 'bg-gray-700 text-gray-300 cursor-wait'
+                          : 'bg-blue-600 text-white hover:bg-blue-500'
+                      }`}
+                    >
+                      <Download size={12} /> {isDownloading ? 'Preparing...' : 'Download'}
+                    </button>
+                  </div>
+                  <div className={`text-[10px] font-mono leading-5 ${theme === 'dark' ? 'text-gray-500' : 'text-gray-600'}`}>
+                    <div className="flex items-center gap-2">
+                      <span>project/</span>
+                    </div>
+                    <div className="pl-3">dags/</div>
+                    <div className="pl-6">{result ? `${result.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.py` : 'pipeline.py'}</div>
+                    <div className="pl-3">infrastructure/</div>
+                    <div className="pl-6">Dockerfile</div>
+                    <div className="pl-3">requirements.txt</div>
+                    <div className="pl-3">README.md</div>
+                  </div>
+                </div>
             </div>
           </div>
 
@@ -645,20 +736,20 @@ const App: React.FC = () => {
         <p className="text-base text-gray-500 font-medium max-w-2xl mx-auto">Configure the temporal execution triggers for production-ready DAG deployments.</p>
         </div>
 
-      <div className={`p-10 rounded-[2.5rem] border shadow-3xl ${theme === 'dark' ? 'bg-[#0a0a0a] border-gray-800 shadow-black/80' : 'bg-white border-gray-200 shadow-gray-100'}`}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
+        <div className={`p-8 rounded-[2.25rem] border shadow-3xl ${theme === 'dark' ? 'bg-[#0a0a0a] border-gray-800 shadow-black/80' : 'bg-white border-gray-200 shadow-gray-100'}`}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 {(['once', 'hourly', 'weekly', 'monthly', 'cron'] as ScheduleType[]).map((type) => (
                     <button 
                         key={type}
                         onClick={() => setSchedule({ type })}
-              className={`flex flex-col items-center gap-4 p-8 rounded-[2rem] border transition-all group ${
+            className={`flex flex-col items-center gap-3 p-6 rounded-[1.6rem] border transition-all group ${
                             schedule.type === type 
                             ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_35px_rgba(59,130,246,0.5)] scale-105' 
                             : theme === 'dark' ? 'bg-black/40 border-gray-800 text-gray-500 hover:border-gray-600 hover:bg-black/60' : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300'
                         }`}
                     >
-              <CalendarDays size={36} className={schedule.type === type ? 'text-white' : 'text-gray-600 group-hover:text-blue-500 transition-colors'} />
-                        <span className="text-[12px] font-black uppercase tracking-[0.2em]">{type}</span>
+            <CalendarDays size={30} className={schedule.type === type ? 'text-white' : 'text-gray-600 group-hover:text-blue-500 transition-colors'} />
+                <span className="text-[11px] font-black uppercase tracking-[0.18em]">{type}</span>
                     </button>
                 ))}
             </div>
@@ -694,10 +785,20 @@ const App: React.FC = () => {
 
                 <div className={`w-px hidden lg:block ${theme === 'dark' ? 'bg-gray-800' : 'bg-gray-100'}`}></div>
 
-                <div className="w-full lg:w-80 flex flex-col justify-end">
-                  <button className="w-full px-8 py-5 bg-blue-600 text-white rounded-[1.6rem] font-black text-sm uppercase tracking-[0.2em] hover:bg-blue-500 transition-all shadow-2xl active:scale-95">
-                        <CheckCircle2 size={20} /> Deploy Timers
-                    </button>
+                <div className="w-full lg:w-80 flex flex-col justify-end gap-3">
+                  <button 
+                    onClick={handleDeployTimers}
+                    disabled={deployStatus === 'deploying'}
+                    className={`w-full px-8 py-5 rounded-[1.6rem] font-black text-sm uppercase tracking-[0.2em] transition-all shadow-2xl active:scale-95 ${deployStatus === 'deploying' ? 'bg-gray-700 text-gray-300 cursor-wait' : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                  >
+                        <CheckCircle2 size={20} /> {deployStatus === 'deploying' ? 'Deploying...' : 'Deploy Timers'}
+                  </button>
+                  {deployStatus === 'deployed' && (
+                    <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Timers deployed successfully.</p>
+                  )}
+                  {deployStatus === 'error' && (
+                    <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Enter a cron value to deploy.</p>
+                  )}
                 </div>
             </div>
         </div>
@@ -747,7 +848,7 @@ const App: React.FC = () => {
                 </button>
                 <div className={`flex items-center gap-4 text-[10px] font-black uppercase tracking-[0.2em] px-8 py-4 rounded-xl border shadow-2xl transition-all ${theme === 'dark' ? 'bg-black border-gray-800 text-gray-400' : 'bg-white border-gray-200 text-gray-600'}`}>
                   <div className={`w-2.5 h-2.5 rounded-full bg-blue-500 shadow-[0_0_12px_#3b82f6] ${status === 'generating' ? 'animate-ping' : ''}`}></div>
-                  <span>Gemini 3 Pro</span>
+                  <span>DAG PRO</span>
                 </div>
               </div>
           </div>

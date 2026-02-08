@@ -10,6 +10,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
+      html, body, #root {
+        height: 100%;
+      }
       body {
         font-family: 'Inter', sans-serif;
         background-color: #0a0a0a;
@@ -19,18 +22,18 @@
         font-family: 'JetBrains+Mono', monospace;
       }
       ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #111;
+        background: transparent;
       }
       ::-webkit-scrollbar-thumb {
-        background: #333;
-        border-radius: 4px;
+        background: rgba(148, 163, 184, 0.45);
+        border-radius: 999px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #444;
+        background: rgba(148, 163, 184, 0.7);
       }
     </style>
   <script type="importmap">
