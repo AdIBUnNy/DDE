@@ -1,0 +1,5 @@
+{
+  "name": "DDE: AI Data Pipeline Architect",
+  "description": "An advanced engineering tool for automatically generating executable data pipeline architectures (Airflow DAGs) based on V-Model engineering workflows and MBSE artifacts.",
+  "requestFramePermissions": []
+}
